@@ -7,119 +7,87 @@ concurrency:
 on:
   push:
     branches: [ "master" ]
-  pull_request:
-    branches: [ "master" ]
+  workflow_dispatch:
 
 jobs:
-  build-windows:
-    runs-on: windows-2022
-
-    steps:
-    - name: Checkout
-      uses: actions/checkout@v6
-
-    - name: Download lua
-      id: lua
-      uses: mercury233/action-cache-download-file@42a33307a0e00b163efaf26f29149a62d7bbd37d # v1.3.0
-      with:
-        url: https://www.lua.org/ftp/lua-5.4.8.tar.gz
-        sha256: 4f18ddae154e793e46eeab727c59ef1c0c0c2b744e7b94219710d76f530629ae
-
-    - name: Lua
-      run: |
-        tar -xzf ${{ steps.lua.outputs.filepath }}
-        move lua-5.4.8 lua
-
-    - name: Download premake
-      id: premake
-      uses: mercury233/action-cache-download-file@42a33307a0e00b163efaf26f29149a62d7bbd37d
-      with:
-        url: https://github.com/premake/premake-core/releases/download/v5.0.0-beta8/premake-5.0.0-beta8-windows.zip
-        sha256: e64ce2ed8778e0098f63674cca61fe33941b5f0c8d9a4afd651152bdea3758ab
-
-    - name: Premake
-      run: |
-        mkdir premake-5
-        7z x ${{ steps.premake.outputs.filepath }} -opremake-5
-        copy premake\lua.lua lua\premake5.lua
-        copy premake\dll.lua dll.lua
-        .\premake-5\premake5.exe vs2022 --file=dll.lua
-
-    - name: Add msbuild to PATH
-      uses: microsoft/setup-msbuild@v3
-
-    - name: Build x32
-      run: |
-        msbuild build\ocgcoredll.sln /m /t:Build /p:"Configuration=Release;Platform=Win32"
-
-    - name: Build x64
-      run: |
-        msbuild build\ocgcoredll.sln /m /t:Build /p:"Configuration=Release;Platform=x64"
-
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v6
-      with:
-        name: ocgcore-windows
-        path: |
-          build/bin/x32/Release/ocgcore.dll
-          build/bin/x64/Release/ocgcore.dll
-
-  build-linux:
+  # ------------------------------------------------------------------
+  # 依赖在 Linux runner 上拉取：同样的 URL，linux 只要 3 秒，
+  # Windows runner 上 curl 会超时（exit 28）。下好之后当 artifact 传过去。
+  # ------------------------------------------------------------------
+  fetch-deps:
+    name: fetch-deps
     runs-on: ubuntu-latest
-
     steps:
-    - name: Checkout
-      uses: actions/checkout@v6
+      - name: Download lua
+        run: |
+          set -e
+          curl -fL --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 30 --max-time 300 \
+            -o lua.tar.gz https://www.lua.org/ftp/lua-5.4.8.tar.gz
+          echo "4f18ddae154e793e46eeab727c59ef1c0c0c2b744e7b94219710d76f530629ae  lua.tar.gz" | sha256sum -c -
 
-    - name: Install Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-multilib g++-multilib
+      - name: Download premake
+        run: |
+          set -e
+          curl -fL --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 30 --max-time 300 \
+            -o premake-5.zip https://github.com/premake/premake-core/releases/download/v5.0.0-beta8/premake-5.0.0-beta8-windows.zip
+          echo "e64ce2ed8778e0098f63674cca61fe33941b5f0c8d9a4afd651152bdea3758ab  premake-5.zip" | sha256sum -c -
 
-    - name: Download lua
-      id: lua
-      uses: mercury233/action-cache-download-file@42a33307a0e00b163efaf26f29149a62d7bbd37d
-      with:
-        url: https://www.lua.org/ftp/lua-5.4.8.tar.gz
-        sha256: 4f18ddae154e793e46eeab727c59ef1c0c0c2b744e7b94219710d76f530629ae
+      - name: Upload deps
+        uses: actions/upload-artifact@v6
+        with:
+          name: deps
+          path: |
+            lua.tar.gz
+            premake-5.zip
+          if-no-files-found: error
+          retention-days: 3
 
-    - name: Lua
-      run: |
-        tar -xzf ${{ steps.lua.outputs.filepath }}
-        mv lua-5.4.8 lua
+  build-windows:
+    name: build-windows
+    needs: fetch-deps
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
 
-    - name: Download premake
-      id: premake
-      uses: mercury233/action-cache-download-file@42a33307a0e00b163efaf26f29149a62d7bbd37d
-      with:
-        url: https://github.com/premake/premake-core/releases/download/v5.0.0-beta8/premake-5.0.0-beta8-linux.tar.gz
-        sha256: 63edd3e7461eebdd45b500a3c7e8ad4e7a67d68f230010f9a97cbb71b4ec59c8
+      - name: Fetch deps
+        uses: actions/download-artifact@v6
+        with:
+          name: deps
 
-    - name: Premake
-      run: |
-        mkdir premake-5
-        tar -C premake-5 -xzf ${{ steps.premake.outputs.filepath }}
-        cp premake/lua.lua lua/premake5.lua
-        cp premake/dll.lua dll.lua
-        chmod +x premake-5/premake5
-        ./premake-5/premake5 gmake --file=dll.lua
+      - name: Prepare lua
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          tar -xzf lua.tar.gz
+          if (-not (Test-Path 'lua-5.4.8\src\lua.h')) { throw 'lua 解压后结构不对：找不到 lua-5.4.8\src\lua.h' }
+          Move-Item -Force 'lua-5.4.8' 'lua'
 
-    - name: Build x32
-      run: |
-        cd build
-        make -j $(nproc) config=release_x32
-        cd ..
+      - name: Premake
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path 'premake-5' | Out-Null
+          Expand-Archive -Path 'premake-5.zip' -DestinationPath 'premake-5' -Force
+          Copy-Item 'premake\lua.lua' 'lua\premake5.lua' -Force
+          Copy-Item 'premake\dll.lua' 'dll.lua' -Force
+          & '.\premake-5\premake5.exe' vs2022 --file=dll.lua
+          if ($LASTEXITCODE -ne 0) { throw "premake 退出码 $LASTEXITCODE" }
+          if (-not (Test-Path 'build\ocgcoredll.sln')) { throw 'premake 没有生成 build\ocgcoredll.sln' }
 
-    - name: Build x64
-      run: |
-        cd build
-        make -j $(nproc) config=release_x64
-        cd ..
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@v3
 
-    - name: Upload build artifacts
-      uses: actions/upload-artifact@v6
-      with:
-        name: ocgcore-linux
-        path: |
-          build/bin/x32/Release/libocgcore.so
-          build/bin/x64/Release/libocgcore.so
+      - name: Build x64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          msbuild 'build\ocgcoredll.sln' /m /t:Build /p:Configuration=Release /p:Platform=x64
+          if ($LASTEXITCODE -ne 0) { throw "msbuild 退出码 $LASTEXITCODE" }
+
+      - name: Upload ocgcore.dll
+        uses: actions/upload-artifact@v6
+        with:
+          name: ocgcore-windows
+          path: build/bin/x64/Release/ocgcore.dll
+          if-no-files-found: error
