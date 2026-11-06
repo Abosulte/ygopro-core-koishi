@@ -3814,7 +3814,7 @@ int32_t field::process_turn(uint16_t step, uint8_t turn_player) {
 	}
 	case 2: {
 		// Draw, new ruling
-		if((core.duel_rule <= 2) || (infos.turn_id > 1)) {
+		if((core.duel_options & DUEL_FIRST_TURN_DRAW) || (core.duel_rule <= 2) || (infos.turn_id > 1)) {
 			int32_t count = get_draw_count(infos.turn_player);
 			if(count > 0) {
 				draw(nullptr, REASON_RULE, turn_player, turn_player, count);

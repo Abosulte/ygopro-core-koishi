@@ -446,6 +446,8 @@ enum LuaParamType : int32_t {
 #define DUEL_SIMPLE_AI			0x40
 #define DUEL_RETURN_DECK_TOP	0x80
 #define DUEL_REVEAL_DECK_SEQ	0x100
+// Custom: first turn draw (FTD). Off by default; opt-in via duel options.
+#define DUEL_FIRST_TURN_DRAW	0x200
 
 //Activity
 #define ACTIVITY_SUMMON			1
